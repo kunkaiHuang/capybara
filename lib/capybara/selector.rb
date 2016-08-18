@@ -150,8 +150,16 @@ Capybara::Selector::FilterSet.add(:_field) do
 end
 
 Capybara.add_selector(:field) do
-  xpath(:id, :name, :placeholder) do |locator, options|
+  xpath(:id, :name, :placeholder, :type) do |locator, options|
     xpath = XPath.descendant(:input, :textarea, :select)[~XPath.attr(:type).one_of('submit', 'image', 'hidden')]
+    if options[:type]
+      type=options[:type].to_s
+      if ['textarea', 'select'].include?(type)
+        xpath = XPath.descendant(type.to_sym)
+      else
+        xpath = xpath[XPath.attr(:type).equals(type)]
+      end
+    end
     locate_field(xpath, locator, options)
   end
 
@@ -160,14 +168,6 @@ Capybara.add_selector(:field) do
   filter(:readonly, boolean: true) { |node, value| not(value ^ node.readonly?) }
   filter(:with) do |node, with|
     with.is_a?(Regexp) ? node.value =~ with : node.value == with.to_s
-  end
-  filter(:type) do |node, type|
-    type = type.to_s
-    if ['textarea', 'select'].include?(type)
-      node.tag_name == type
-    else
-      node[:type] == type
-    end
   end
   describe do |options|
     desc, states = String.new, []
