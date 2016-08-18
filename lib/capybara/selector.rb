@@ -4,7 +4,7 @@ require 'capybara/selector/filter_set'
 module Capybara
   class Selector
 
-    attr_reader :name, :format
+    attr_reader :name, :format, :expression_filters
 
     class << self
       def all
@@ -40,13 +40,13 @@ module Capybara
       @filter_set.filters
     end
 
-    def xpath(&block)
-      @format, @expression = :xpath, block if block
+    def xpath(*expression_filters, &block)
+      @format, @expression_filters, @expression = :xpath, expression_filters.flatten, block if block
       format == :xpath ? @expression : nil
     end
 
-    def css(&block)
-      @format, @expression = :css, block if block
+    def css(*expression_filters, &block)
+      @format, @expression_filters, @expression = :css, expression_filters.flatten, block if block
       format == :css ? @expression : nil
     end
 
@@ -64,9 +64,9 @@ module Capybara
       @filter_set.description(options)
     end
 
-    def call(locator)
+    def call(locator, options={})
       if format
-        @expression.call(locator)
+        @expression.call(locator, options.select {|k,v| @expression_filters.include?(k)})
       else
         warn "Selector has no format"
       end
@@ -94,15 +94,23 @@ module Capybara
 
     private
 
-    def locate_field(xpath, locator)
-      attr_matchers =  XPath.attr(:id).equals(locator) |
-                       XPath.attr(:name).equals(locator) |
-                       XPath.attr(:placeholder).equals(locator) |
-                       XPath.attr(:id).equals(XPath.anywhere(:label)[XPath.string.n.is(locator)].attr(:for))
-      attr_matchers |= XPath.attr(:'aria-label').is(locator) if Capybara.enable_aria_label
+    def locate_field(xpath, locator, options={})
+      locate_field = xpath
+      if locator
+        locator = locator.to_s
+        attr_matchers =  XPath.attr(:id).equals(locator) |
+                         XPath.attr(:name).equals(locator) |
+                         XPath.attr(:placeholder).equals(locator) |
+                         XPath.attr(:id).equals(XPath.anywhere(:label)[XPath.string.n.is(locator)].attr(:for))
+        attr_matchers |= XPath.attr(:'aria-label').is(locator) if Capybara.enable_aria_label
 
-      locate_field = xpath[attr_matchers]
-      locate_field += XPath.descendant(:label)[XPath.string.n.is(locator)].descendant(xpath)
+        locate_field = locate_field[attr_matchers]
+        locate_field += XPath.descendant(:label)[XPath.string.n.is(locator)].descendant(xpath)
+      end
+      locate_field = locate_field[XPath.attr(:id).equals(options[:id])] if options[:id]
+      locate_field = locate_field[XPath.attr(:name).equals(options[:name])] if options[:name]
+      locate_field = locate_field[XPath.attr(:placeholder).equals(options[:placeholder])] if options[:placeholder]
+
       locate_field
     end
   end
@@ -121,9 +129,6 @@ Capybara.add_selector(:id) do
 end
 
 Capybara::Selector::FilterSet.add(:_field) do
-  filter(:id) { |node, id| node['id'] == id }
-  filter(:name) { |node, name| node['name'] == name }
-  filter(:placeholder) { |node, placeholder| node['placeholder'] == placeholder }
   filter(:checked, boolean: true) { |node, value| not(value ^ node.checked?) }
   filter(:unchecked, boolean: true) { |node, value| (value ^ node.checked?) }
   filter(:disabled, default: false, boolean: true, skip_if: :all) { |node, value| not(value ^ node.disabled?) }
@@ -145,10 +150,9 @@ Capybara::Selector::FilterSet.add(:_field) do
 end
 
 Capybara.add_selector(:field) do
-  xpath do |locator|
+  xpath(:id, :name, :placeholder) do |locator, options|
     xpath = XPath.descendant(:input, :textarea, :select)[~XPath.attr(:type).one_of('submit', 'image', 'hidden')]
-    xpath = locate_field(xpath, locator.to_s) unless locator.nil?
-    xpath
+    locate_field(xpath, locator, options)
   end
 
   filter_set(:_field)
@@ -208,7 +212,7 @@ Capybara.add_selector(:link) do
 end
 
 Capybara.add_selector(:button) do
-  xpath do |locator|
+  xpath do |locator, options={}|
     input_btn_xpath = XPath.descendant(:input)[XPath.attr(:type).one_of('submit', 'reset', 'image', 'button')]
     btn_xpath = XPath.descendant(:button)
     image_btn_xpath = XPath.descendant(:input)[XPath.attr(:type).equals('image')]
@@ -248,24 +252,22 @@ end
 
 Capybara.add_selector(:fillable_field) do
   label "field"
-  xpath do |locator|
+  xpath(:id, :name, :placeholder) do |locator, options|
     xpath = XPath.descendant(:input, :textarea)[~XPath.attr(:type).one_of('submit', 'image', 'radio', 'checkbox', 'hidden', 'file')]
-    xpath = locate_field(xpath, locator.to_s) unless locator.nil?
-    xpath
+    locate_field(xpath, locator, options)
   end
 
-  filter_set(:_field, [:id, :name, :placeholder, :disabled, :multiple])
+  filter_set(:_field, [:disabled, :multiple])
 end
 
 Capybara.add_selector(:radio_button) do
   label "radio button"
-  xpath do |locator|
+  xpath(:id, :name) do |locator, options|
     xpath = XPath.descendant(:input)[XPath.attr(:type).equals('radio')]
-    xpath = locate_field(xpath, locator.to_s) unless locator.nil?
-    xpath
+    locate_field(xpath, locator, options)
   end
 
-  filter_set(:_field, [:id, :name, :checked, :unchecked, :disabled])
+  filter_set(:_field, [:checked, :unchecked, :disabled])
 
   filter(:option)  { |node, value|  node.value == value.to_s }
 
@@ -277,13 +279,12 @@ Capybara.add_selector(:radio_button) do
 end
 
 Capybara.add_selector(:checkbox) do
-  xpath do |locator|
+  xpath(:id, :name) do |locator, options|
     xpath = XPath.descendant(:input)[XPath.attr(:type).equals('checkbox')]
-    xpath = locate_field(xpath, locator.to_s) unless locator.nil?
-    xpath
+    locate_field(xpath, locator, options)
   end
 
-  filter_set(:_field, [:id, :name, :checked, :unchecked, :disabled])
+  filter_set(:_field, [:checked, :unchecked, :disabled])
 
   filter(:option)  { |node, value|  node.value == value.to_s }
 
@@ -296,13 +297,12 @@ end
 
 Capybara.add_selector(:select) do
   label "select box"
-  xpath do |locator|
+  xpath(:id, :name, :placeholder) do |locator, options|
     xpath = XPath.descendant(:select)
-    xpath = locate_field(xpath, locator.to_s) unless locator.nil?
-    xpath
+    locate_field(xpath, locator, options)
   end
 
-  filter_set(:_field, [:id, :name, :placeholder, :disabled, :multiple])
+  filter_set(:_field, [:disabled, :multiple])
 
   filter(:options) do |node, options|
     if node.visible?
@@ -353,13 +353,12 @@ end
 
 Capybara.add_selector(:file_field) do
   label "file field"
-  xpath do |locator|
+  xpath(:id, :name) do |locator, options|
     xpath = XPath.descendant(:input)[XPath.attr(:type).equals('file')]
-    xpath = locate_field(xpath, locator.to_s) unless locator.nil?
-    xpath
+    locate_field(xpath, locator, options)
   end
 
-  filter_set(:_field, [:id, :name, :disabled, :multiple])
+  filter_set(:_field, [:disabled, :multiple])
 end
 
 Capybara.add_selector(:label) do
